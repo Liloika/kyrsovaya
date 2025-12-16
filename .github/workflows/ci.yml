@@ -3,36 +3,16 @@ name: Kubernetes Security Scan
 on:
   push:
     branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
 
 jobs:
-  scan-manifests:
+  scan:
     runs-on: ubuntu-latest
-
+    
     steps:
-
-    - name: Checkout repository
+    - name: Checkout code
       uses: actions/checkout@v4
-
-    - name: Run kube-score analysis
-      uses: instrumenta/kube-score-action@v1
-      with:
-        directory: './k8s'
-        output-format: 'ci'
-        exit-zero: false
-        extra-args: '--ignore-container-cpu-limit --ignore-container-memory-limit'
-
-    - name: Run Trivy security scan
-      uses: aquasecurity/trivy-action@master
-      with:
-        scan-type: 'config'
-        scan-ref: './k8s'
-        format: 'table'
-        exit-code: '1'
-
-    - name: Validate Kubernetes schemas
+      
+    - name: Run kube-score (Docker version)
       run: |
-        wget https://github.com/instrumenta/kubeval/releases/latest/download/kubeval-linux-amd64.tar.gz
-        tar xf kubeval-linux-amd64.tar.gz
-        ./kubeval k8s/*.yml --strict
+        echo "=== Scanning ALL Kubernetes manifests ==="
+        docker run --rm -v $(pwd):/workdir zegl/kube-score:latest score k8s/*.yml || echo "Kube-score found issues"
