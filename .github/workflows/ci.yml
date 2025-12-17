@@ -17,19 +17,21 @@ jobs:
         run: |
           mkdir -p report
 
-          # Запускаем kube-score, сохраняем вывод,
-          # job реально может упасть из-за ошибок
+          # Запускаем kube-score и сохраняем вывод
           docker run --rm \
             -v ${{ github.workspace }}:/workdir \
             zegl/kube-score:latest \
             score /workdir/k8s/deploy-false/deployment.yml \
             --output-format json > report/false.json || true
 
-          # Проверяем, есть ли ошибки
+          # Определяем, есть ли ошибки
           ERR_COUNT=$(jq '.[] | .checks[] | select(.grade < 5) | length' report/false.json | wc -l)
+
+          # Если есть ошибки, выдаём exit 1 для Actions
           if [ "$ERR_COUNT" -gt 0 ]; then
             echo "::error ::Scan violate manifest завершился с ошибками ($ERR_COUNT)"
             echo "Scan violate manifest: ❌ завершился с ошибками" >> $GITHUB_STEP_SUMMARY
+            exit 1
           else
             echo "::notice ::Scan violate manifest выполнен успешно"
             echo "Scan violate manifest: ✅ выполнен успешно" >> $GITHUB_STEP_SUMMARY
@@ -59,15 +61,7 @@ jobs:
             score /workdir/k8s/deploy-true/deployment.yml \
             --output-format json > report/true.json || true
 
-          # Проверяем ошибки
-          ERR_COUNT=$(jq '.[] | .checks[] | select(.grade < 5) | length' report/true.json | wc -l)
-          if [ "$ERR_COUNT" -gt 0 ]; then
-            echo "::error ::Scan non-violate manifest завершился с ошибками ($ERR_COUNT)"
-            echo "Scan non-violate manifest: ❌ завершился с ошибками" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "::notice ::Scan non-violate manifest выполнен успешно"
-            echo "Scan non-violate manifest: ✅ выполнен успешно" >> $GITHUB_STEP_SUMMARY
-          fi
+          echo "Scan non-violate manifest: ✅ выполнен успешно" >> $GITHUB_STEP_SUMMARY
 
       - name: Upload non-violate result
         uses: actions/upload-artifact@v4
@@ -99,50 +93,16 @@ jobs:
           <meta charset="UTF-8">
           <title>Kubernetes Security Scan Report</title>
           <style>
-          body {
-            font-family: Arial, sans-serif;
-            background: #f5f7fa;
-            margin: 20px;
-          }
-          h1 {
-            color: #2c3e50;
-          }
-          .file {
-            background: #ffffff;
-            border: 1px solid #dcdcdc;
-            border-radius: 6px;
-            padding: 15px;
-            margin-bottom: 20px;
-          }
-          details {
-            margin-top: 10px;
-            border-left: 4px solid #3498db;
-            padding-left: 10px;
-          }
-          summary {
-            font-weight: bold;
-            cursor: pointer;
-          }
-          .ok {
-            color: #2ecc71;
-          }
-          .error {
-            color: #e74c3c;
-          }
-          .skipped {
-            color: #f39c12;
-          }
-          .comment {
-            background: #fefefe;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-            padding: 8px;
-            margin: 5px 0;
-          }
-          .meta {
-            color: #7f8c8d;
-            font-size: 14px;
-          }
+          body { font-family: Arial, sans-serif; background: #f5f7fa; margin: 20px; }
+          h1 { color: #2c3e50; }
+          .file { background: #ffffff; border: 1px solid #dcdcdc; border-radius: 6px; padding: 15px; margin-bottom: 20px; }
+          details { margin-top: 10px; border-left: 4px solid #3498db; padding-left: 10px; }
+          summary { font-weight: bold; cursor: pointer; }
+          .ok { color: #2ecc71; }
+          .error { color: #e74c3c; }
+          .skipped { color: #f39c12; }
+          .comment { background: #fefefe; border: 1px solid #ddd; border-radius: 4px; padding: 8px; margin: 5px 0; }
+          .meta { color: #7f8c8d; font-size: 14px; }
           </style>
           </head>
           <body>
