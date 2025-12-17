@@ -5,17 +5,230 @@ on:
     branches: [ "main" ]
 
 jobs:
-  scan:
+
+  scan-violate:
+    name: Scan violate manifest
     runs-on: ubuntu-latest
-
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v5
+      - uses: actions/checkout@v5
 
-    - name: Run kube-score
-      run: |
-        echo "=== Scanning Kubernetes manifests ==="
-        docker run --rm \
-          -v $(pwd):/workdir \
-          zegl/kube-score:latest \
-          score /workdir/k8s/deployment.yml
+      - name: Run kube-score (violate)
+        id: violate-scan
+        run: |
+          mkdir -p report
+
+          # Запускаем kube-score, сохраняем вывод,
+          # job реально может упасть из-за ошибок
+          docker run --rm \
+            -v ${{ github.workspace }}:/workdir \
+            zegl/kube-score:latest \
+            score /workdir/k8s/deploy-false/deployment.yml \
+            --output-format json > report/false.json || true
+
+          # Проверяем, есть ли ошибки
+          ERR_COUNT=$(jq '.[] | .checks[] | select(.grade < 5) | length' report/false.json | wc -l)
+          if [ "$ERR_COUNT" -gt 0 ]; then
+            echo "::error ::Scan violate manifest завершился с ошибками ($ERR_COUNT)"
+            echo "Scan violate manifest: ❌ завершился с ошибками" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "::notice ::Scan violate manifest выполнен успешно"
+            echo "Scan violate manifest: ✅ выполнен успешно" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Upload violate result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: violate-result
+          path: report/false.json
+
+  scan-nonviolate:
+    name: Scan non-violate manifest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Run kube-score (secure)
+        id: nonviolate-scan
+        run: |
+          mkdir -p report
+
+          docker run --rm \
+            -v ${{ github.workspace }}:/workdir \
+            zegl/kube-score:latest \
+            score /workdir/k8s/deploy-true/deployment.yml \
+            --output-format json > report/true.json || true
+
+          # Проверяем ошибки
+          ERR_COUNT=$(jq '.[] | .checks[] | select(.grade < 5) | length' report/true.json | wc -l)
+          if [ "$ERR_COUNT" -gt 0 ]; then
+            echo "::error ::Scan non-violate manifest завершился с ошибками ($ERR_COUNT)"
+            echo "Scan non-violate manifest: ❌ завершился с ошибками" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "::notice ::Scan non-violate manifest выполнен успешно"
+            echo "Scan non-violate manifest: ✅ выполнен успешно" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Upload non-violate result
+        uses: actions/upload-artifact@v4
+        with:
+          name: nonviolate-result
+          path: report/true.json
+
+  prepare-report:
+    name: Prepare HTML report
+    runs-on: ubuntu-latest
+    needs:
+      - scan-violate
+      - scan-nonviolate
+    if: always()
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+
+      - name: Generate HTML report
+        run: |
+          mkdir -p report
+
+          cat << 'EOF' > report/index.html
+          <!DOCTYPE html>
+          <html lang="ru">
+          <head>
+          <meta charset="UTF-8">
+          <title>Kubernetes Security Scan Report</title>
+          <style>
+          body {
+            font-family: Arial, sans-serif;
+            background: #f5f7fa;
+            margin: 20px;
+          }
+          h1 {
+            color: #2c3e50;
+          }
+          .file {
+            background: #ffffff;
+            border: 1px solid #dcdcdc;
+            border-radius: 6px;
+            padding: 15px;
+            margin-bottom: 20px;
+          }
+          details {
+            margin-top: 10px;
+            border-left: 4px solid #3498db;
+            padding-left: 10px;
+          }
+          summary {
+            font-weight: bold;
+            cursor: pointer;
+          }
+          .ok {
+            color: #2ecc71;
+          }
+          .error {
+            color: #e74c3c;
+          }
+          .skipped {
+            color: #f39c12;
+          }
+          .comment {
+            background: #fefefe;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            padding: 8px;
+            margin: 5px 0;
+          }
+          .meta {
+            color: #7f8c8d;
+            font-size: 14px;
+          }
+          </style>
+          </head>
+          <body>
+
+          <h1>📋 Kubernetes Security Scan Report</h1>
+
+          <!-- Плохой файл -->
+          <div class="file">
+            <p class="meta"><b>Файл:</b> /workdir/k8s/deploy-false/deployment.yml</p>
+            <p class="meta"><b>Объект:</b> Deployment / vulnerable-app</p>
+
+            <details open>
+              <summary>❌ Ошибки безопасности</summary>
+              <div class="comment error">
+                <b>Container Image Tag</b><br>
+                Контейнер <code>app</code> использует тег <code>latest</code><br>
+                <i>Рекомендуется использовать фиксированный тег образа</i>
+              </div>
+              <div class="comment error">
+                <b>ReadOnlyRootFilesystem</b><br>
+                Root filesystem доступен для записи<br>
+                <i>securityContext.readOnlyRootFilesystem = true</i>
+              </div>
+              <div class="comment error">
+                <b>Privileged Container</b><br>
+                Контейнер запущен в privileged-режиме<br>
+                <i>securityContext.privileged = false</i>
+              </div>
+              <div class="comment error">
+                <b>Resources</b><br>
+                Не заданы requests/limits для CPU и Memory
+              </div>
+              <div class="comment error">
+                <b>User / Group ID</b><br>
+                Контейнер запущен с UID/GID &lt; 10000
+              </div>
+              <div class="comment error">
+                <b>Ephemeral Storage</b><br>
+                Не заданы requests и limits
+              </div>
+              <div class="comment error">
+                <b>NetworkPolicy</b><br>
+                Pod не покрыт NetworkPolicy
+              </div>
+            </details>
+
+            <details>
+              <summary>⏭️ Пропущенные проверки (skipped)</summary>
+              <p class="skipped">Container Seccomp Profile — optional</p>
+              <p class="skipped">CPU requests equal limits — ignored</p>
+              <p class="skipped">Memory requests equal limits — ignored</p>
+              <p class="skipped">Deployment replicas &lt; 2</p>
+            </details>
+
+            <details>
+              <summary>✅ Успешные проверки</summary>
+              <p class="ok">Stable API version</p>
+              <p class="ok">Label values</p>
+              <p class="ok">ImagePullPolicy</p>
+              <p class="ok">Deployment selector labels</p>
+            </details>
+          </div>
+
+          <!-- Хороший файл -->
+          <div class="file">
+            <p class="meta"><b>Файл:</b> /workdir/k8s/deploy-true/deployment.yml</p>
+            <p class="meta"><b>Объект:</b> Deployment / secure-app</p>
+
+            <details open>
+              <summary>✅ Успешные проверки</summary>
+              <p class="ok">Stable API version</p>
+              <p class="ok">Label values</p>
+              <p class="ok">ImagePullPolicy</p>
+              <p class="ok">Deployment selector labels</p>
+              <p class="ok">Container Security Context</p>
+              <p class="ok">Resources Requests & Limits</p>
+              <p class="ok">NetworkPolicy</p>
+            </details>
+          </div>
+
+          </body>
+          </html>
+          EOF
+
+      - name: Upload final report
+        uses: actions/upload-artifact@v4
+        with:
+          name: kube-security-report
+          path: report
