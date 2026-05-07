@@ -1,0 +1,30 @@
+name: Full Kubernetes Audit
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+
+jobs:
+  audit:
+    name: Run full audit
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Install kubectl
+        uses: azure/setup-kubectl@v4
+
+      - name: Run audit script
+        run: |
+          chmod +x ./scripts/run-audit.sh
+          ./scripts/run-audit.sh
+
+      - name: Upload audit reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: audit-reports
+          path: reports/
