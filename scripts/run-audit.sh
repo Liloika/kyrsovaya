@@ -323,3 +323,46 @@ cat >> reports/index.html << 'EOF'
 </html>
 EOF
 echo "Готово. Отчёты сохранены в reports/"
+
+# ============================================
+# Анализ результатов и возврат кода завершения
+# ============================================
+echo ""
+echo "=== Анализ результатов ==="
+
+CRITICAL_ERRORS=0
+
+# Проверка kube-score
+if [ -f reports/kube-score-bad.json ]; then
+    KUBE_SCORE_ERRORS=$(jq '[.[] | .checks[] | select(.grade < 5)] | length' reports/kube-score-bad.json)
+    if [ "$KUBE_SCORE_ERRORS" -gt 0 ]; then
+        echo "❌ kube-score: обнаружено $KUBE_SCORE_ERRORS критических нарушений"
+        CRITICAL_ERRORS=$((CRITICAL_ERRORS + KUBE_SCORE_ERRORS))
+    else
+        echo "✅ kube-score: критических нарушений не обнаружено"
+    fi
+fi
+
+# Проверка OPA
+if [ -f reports/opa-bad.txt ]; then
+    if grep -q "deny" reports/opa-bad.txt; then
+        echo "❌ OPA: обнаружены нарушения политик"
+        CRITICAL_ERRORS=$((CRITICAL_ERRORS + 1))
+    else
+        echo "✅ OPA: нарушений политик не обнаружено"
+    fi
+fi
+
+# Итоговое решение
+echo ""
+if [ "$CRITICAL_ERRORS" -gt 0 ]; then
+    echo "========================================="
+    echo "❌ ОБНАРУЖЕНО КРИТИЧЕСКИХ НАРУШЕНИЙ: $CRITICAL_ERRORS"
+    echo "========================================="
+    exit 1
+else
+    echo "========================================="
+    echo "✅ КРИТИЧЕСКИХ НАРУШЕНИЙ НЕ ОБНАРУЖЕНО"
+    echo "========================================="
+    exit 0
+fi

@@ -24,10 +24,8 @@ jobs:
             score /workdir/k8s/deploy-false/deployment.yml \
             --output-format json > report/false.json || true
 
-          # Определяем, есть ли ошибки
-          ERR_COUNT=$(jq '.[] | .checks[] | select(.grade < 5) | length' report/false.json | wc -l)
+          ERR_COUNT=$(jq '[.[] | .checks[] | select(.grade < 5)] | length' report/false.json)
 
-          # Если есть ошибки, выдаём exit 1 для Actions
           if [ "$ERR_COUNT" -gt 0 ]; then
             echo "::error ::Scan violate manifest завершился с ошибками ($ERR_COUNT)"
             echo "Scan violate manifest: ❌ завершился с ошибками" >> $GITHUB_STEP_SUMMARY
@@ -69,12 +67,51 @@ jobs:
           name: nonviolate-result
           path: report/true.json
 
+  # ✅ ДОБАВЛЕНО: Проверка OPA политик
+  opa-policy-check:
+    name: OPA Policy Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Run OPA policy check (violate)
+        id: opa-violate
+        run: |
+          mkdir -p report
+
+          docker run --rm \
+            -v ${{ github.workspace }}:/data \
+            openpolicyagent/opa:latest \
+            eval \
+            --input /data/k8s/deploy-false/deployment.yml \
+            --data /data/policies/deny-privileged.rego \
+            'data.kubernetes.security.deny' > report/opa-violate.json || true
+
+          OPA_VIOLATIONS=$(jq '.result[0].expressions[0].value | length' report/opa-violate.json)
+
+          if [ "$OPA_VIOLATIONS" -gt 0 ]; then
+            echo "::error ::OPA выявил нарушений политик: $OPA_VIOLATIONS"
+            echo "OPA Policy Check (violate): ❌ выявлено $OPA_VIOLATIONS нарушений" >> $GITHUB_STEP_SUMMARY
+            exit 1
+          else
+            echo "::notice ::OPA Policy Check (violate) выполнен успешно"
+            echo "OPA Policy Check (violate): ✅ нарушений не выявлено" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Upload OPA violate result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: opa-violate-result
+          path: report/opa-violate.json
+
   prepare-report:
     name: Prepare HTML report
     runs-on: ubuntu-latest
     needs:
       - scan-violate
       - scan-nonviolate
+      - opa-policy-check
     if: always()
     steps:
       - uses: actions/checkout@v5
@@ -115,7 +152,7 @@ jobs:
             <p class="meta"><b>Объект:</b> Deployment / vulnerable-app</p>
 
             <details open>
-              <summary>❌ Ошибки безопасности</summary>
+              <summary> Ошибки безопасности</summary>
               <div class="comment error">
                 <b>Container Image Tag</b><br>
                 Контейнер <code>app</code> использует тег <code>latest</code><br>
@@ -150,7 +187,7 @@ jobs:
             </details>
 
             <details>
-              <summary>⏭️ Пропущенные проверки (skipped)</summary>
+              <summary> Пропущенные проверки (skipped)</summary>
               <p class="skipped">Container Seccomp Profile — optional</p>
               <p class="skipped">CPU requests equal limits — ignored</p>
               <p class="skipped">Memory requests equal limits — ignored</p>
